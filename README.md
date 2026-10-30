@@ -35,8 +35,8 @@ npx playwright install chromium
 まだリポジトリを取得していない場合は，次の手順で取得します。
 
 ```bash
-git clone https://github.com/MasaKat0/zenn-pdf.git
-cd zenn-pdf
+git clone https://github.com/is0629sy/zenn-book-pdf.git
+cd zenn-book-pdf
 ```
 
 その後，依存パッケージとChromiumを入れます。
