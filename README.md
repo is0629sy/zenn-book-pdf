@@ -1,12 +1,17 @@
 # Zenn PDF Tool
 
-公開されているZennの記事URLを指定し，その記事本文をPDFとして保存するCLIツールです。
+公開されているZennの記事・本（book）のURLを指定し，その本文をPDFとして保存するCLIツールです。
 
 対象URLは次の形式です。
 
 ```text
 https://zenn.dev/<user>/articles/<slug>
+https://zenn.dev/<user>/books/<slug>
+https://zenn.dev/<user>/books/<slug>/viewer/<chapter-slug>
 ```
+
+本のURL（`viewer` なし）を指定した場合は，全チャプターを取得して，表紙・目次付きの1つのPDFにまとめます。
+`viewer/<chapter-slug>` まで指定した場合は，そのチャプター1つだけをPDF化します。
 
 ## 解説記事
 
@@ -79,6 +84,30 @@ npm run pdf -- --url https://zenn.dev/kato_aichi/articles/bad1d62fd7c9f5 --outpu
 npm run pdf -- --url https://zenn.dev/kato_aichi/articles/bad1d62fd7c9f5 --out pdfs/zenn-pdf-article.pdf
 ```
 
+## 本（book）をPDF化する
+
+本のトップページURL（`viewer` を含まないURL）を指定すると，全チャプターをまとめて1つのPDFにします。
+
+```bash
+npm run pdf -- https://zenn.dev/<user>/books/<slug>
+```
+
+出力先を指定しない場合，ファイル名は `pdfs/<user>_<slug>.pdf` になります。
+
+PDFの構成は次のとおりです。
+
+1. 表紙（本のタイトル・概要・タグ・URL）
+2. 目次（チャプター一覧）
+3. 各チャプター本文（チャプターごとに改ページ）
+
+本の特定の1チャプターだけをPDF化したい場合は，`viewer/<chapter-slug>` まで含めたURLを指定します（記事と同じ扱いになります）。
+
+```bash
+npm run pdf -- https://zenn.dev/<user>/books/<slug>/viewer/<chapter-slug>
+```
+
+非公開の本，有料チャプターの本文は対象外です（取得できる範囲のみPDF化されます）。
+
 ## 動作確認
 
 構文チェックは次のコマンドで実行します。
@@ -132,12 +161,14 @@ Chromiumが未導入です。次を実行してください。
 npx playwright install chromium
 ```
 
-### `The URL must point to a Zenn article` と表示される
+### `The URL must point to a Zenn article (...) or a Zenn book (...)` と表示される
 
-ZennのユーザーURLやトップページではなく，記事URLを指定してください。
+ZennのユーザーURLやトップページではなく，記事URLまたは本のURLを指定してください。
 
 ```text
 https://zenn.dev/<user>/articles/<slug>
+https://zenn.dev/<user>/books/<slug>
+https://zenn.dev/<user>/books/<slug>/viewer/<chapter-slug>
 ```
 
 ### PDFの本文が細い列になる

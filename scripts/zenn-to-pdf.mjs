@@ -10,14 +10,21 @@ const DEFAULT_FONT_WAIT_MS = 8000;
 
 function printUsage() {
   console.log(`Usage:
-  npm run pdf -- <zenn-article-url>
-  npm run pdf -- <zenn-article-url> <output-pdf-path>
-  npm run pdf -- --url <zenn-article-url> --output <output-pdf-path>
-  npm run pdf -- --url <zenn-article-url> --out <output-pdf-path>
+  npm run pdf -- <zenn-url>
+  npm run pdf -- <zenn-url> <output-pdf-path>
+  npm run pdf -- --url <zenn-url> --output <output-pdf-path>
+  npm run pdf -- --url <zenn-url> --out <output-pdf-path>
+
+<zenn-url> can be:
+  - An article:         https://zenn.dev/<user>/articles/<slug>
+  - A whole book:        https://zenn.dev/<user>/books/<slug>
+    (all chapters are combined into a single PDF)
+  - A single chapter:    https://zenn.dev/<user>/books/<slug>/viewer/<chapter-slug>
 
 Example:
   npm run pdf -- https://zenn.dev/headwaters/articles/8bc4e8c3119fa3
-  npm run pdf -- https://zenn.dev/headwaters/articles/8bc4e8c3119fa3 pdfs/gbrain.pdf`);
+  npm run pdf -- https://zenn.dev/headwaters/articles/8bc4e8c3119fa3 pdfs/gbrain.pdf
+  npm run pdf -- https://zenn.dev/is0629sy/books/mirakura-shoei-03`);
 }
 
 function parseCliArgs(args) {
@@ -77,7 +84,7 @@ function parseCliArgs(args) {
   return options;
 }
 
-function parseZennArticleUrl(rawUrl) {
+function parseZennUrl(rawUrl) {
   const url = new URL(rawUrl);
   const allowedHost = url.hostname === "zenn.dev" || url.hostname === "www.zenn.dev";
 
@@ -86,13 +93,29 @@ function parseZennArticleUrl(rawUrl) {
   }
 
   const parts = url.pathname.split("/").filter(Boolean);
-  const articleIndex = parts.indexOf("articles");
+  const username = parts[0] || "";
+  const articlesIndex = parts.indexOf("articles");
+  const booksIndex = parts.indexOf("books");
+  const viewerIndex = parts.indexOf("viewer");
 
-  if (articleIndex < 0 || !parts[articleIndex + 1]) {
-    throw new Error("The URL must point to a Zenn article, such as https://zenn.dev/<user>/articles/<slug>.");
+  if (articlesIndex >= 0 && parts[articlesIndex + 1]) {
+    return { kind: "article", url, username, slug: parts[articlesIndex + 1] };
   }
 
-  return url;
+  if (booksIndex >= 0 && parts[booksIndex + 1]) {
+    const bookSlug = parts[booksIndex + 1];
+
+    if (viewerIndex >= 0 && parts[viewerIndex + 1]) {
+      return { kind: "book-chapter", url, username, bookSlug, chapterSlug: parts[viewerIndex + 1] };
+    }
+
+    return { kind: "book", url, username, bookSlug };
+  }
+
+  throw new Error(
+    "The URL must point to a Zenn article (https://zenn.dev/<user>/articles/<slug>) "
+    + "or a Zenn book (https://zenn.dev/<user>/books/<slug> or https://zenn.dev/<user>/books/<slug>/viewer/<chapter-slug>)."
+  );
 }
 
 function sanitizeFileName(value) {
@@ -105,17 +128,26 @@ function sanitizeFileName(value) {
   return sanitized || "zenn-article";
 }
 
-function defaultOutputPath(articleUrl) {
-  const parts = articleUrl.pathname.split("/").filter(Boolean);
-  const articleIndex = parts.indexOf("articles");
-  const author = sanitizeFileName(parts[0] || "zenn");
-  const slug = sanitizeFileName(parts[articleIndex + 1] || "article");
+function defaultOutputPath(target) {
+  const author = sanitizeFileName(target.username || "zenn");
 
-  return path.resolve("pdfs", `${author}_${slug}.pdf`);
+  if (target.kind === "article") {
+    const slug = sanitizeFileName(target.slug || "article");
+    return path.resolve("pdfs", `${author}_${slug}.pdf`);
+  }
+
+  const bookSlug = sanitizeFileName(target.bookSlug || "book");
+
+  if (target.kind === "book-chapter") {
+    const chapterSlug = sanitizeFileName(target.chapterSlug || "chapter");
+    return path.resolve("pdfs", `${author}_${bookSlug}_${chapterSlug}.pdf`);
+  }
+
+  return path.resolve("pdfs", `${author}_${bookSlug}.pdf`);
 }
 
-function normalizeOutputPath(output, articleUrl) {
-  const basePath = output ? path.resolve(output) : defaultOutputPath(articleUrl);
+function normalizeOutputPath(output, target) {
+  const basePath = output ? path.resolve(output) : defaultOutputPath(target);
 
   if (basePath.toLowerCase().endsWith(".pdf")) {
     return basePath;
@@ -199,25 +231,7 @@ async function waitForFonts(page, timeoutMs) {
   }, timeoutMs);
 }
 
-function buildStandaloneHtml(articleData) {
-  const tagsHtml = articleData.tags
-    .map((tag) => `<span class="zenn-pdf-tag">${escapeHtml(tag)}</span>`)
-    .join("");
-
-  const authorHtml = articleData.author
-    ? `<div class="zenn-pdf-author">${escapeHtml(articleData.author)}</div>`
-    : "";
-
-  const publishedAtHtml = articleData.publishedAt
-    ? `<div class="zenn-pdf-date">${escapeHtml(articleData.publishedAt)}</div>`
-    : "";
-
-  return `<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<title>${escapeHtml(articleData.title)}</title>
-<style>
+const BASE_STYLES = `
 @page {
   size: A4;
   margin: 16mm 15mm 17mm 15mm;
@@ -487,6 +501,28 @@ summary {
 .zenn-pdf-content [class*="card"] {
   max-width: 100%;
 }
+`;
+
+function buildStandaloneHtml(articleData) {
+  const tagsHtml = articleData.tags
+    .map((tag) => `<span class="zenn-pdf-tag">${escapeHtml(tag)}</span>`)
+    .join("");
+
+  const authorHtml = articleData.author
+    ? `<div class="zenn-pdf-author">${escapeHtml(articleData.author)}</div>`
+    : "";
+
+  const publishedAtHtml = articleData.publishedAt
+    ? `<div class="zenn-pdf-date">${escapeHtml(articleData.publishedAt)}</div>`
+    : "";
+
+  return `<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(articleData.title)}</title>
+<style>
+${BASE_STYLES}
 </style>
 </head>
 <body>
@@ -500,6 +536,133 @@ ${tagsHtml ? `<div class="zenn-pdf-tags">${tagsHtml}</div>` : ""}
 <section class="zenn-pdf-content znc">
 ${articleData.contentHtml}
 </section>
+</article>
+</body>
+</html>`;
+}
+
+const BOOK_EXTRA_STYLES = `
+.zenn-pdf-cover {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 240mm;
+  break-after: page;
+  page-break-after: always;
+}
+
+.zenn-pdf-cover-label {
+  margin-bottom: 14px;
+  color: #6b7280;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.zenn-pdf-cover-title {
+  margin: 0 0 20px 0;
+  color: #111827;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.zenn-pdf-cover-summary {
+  margin: 0 0 20px 0;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.zenn-pdf-toc {
+  break-after: page;
+  page-break-after: always;
+}
+
+.zenn-pdf-toc-heading {
+  margin: 0 0 18px 0;
+  font-size: 19px;
+}
+
+.zenn-pdf-toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.zenn-pdf-toc-list li {
+  display: flex;
+  gap: 10px;
+  margin: 0 0 10px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px dotted #d1d5db;
+  font-size: 13px;
+}
+
+.zenn-pdf-toc-number {
+  flex: none;
+  color: #6b7280;
+}
+
+.zenn-pdf-chapter + .zenn-pdf-chapter {
+  break-before: page;
+  page-break-before: always;
+}
+
+.zenn-pdf-chapter-title {
+  margin: 0 0 20px 0;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #111827;
+  color: #111827;
+  font-size: 21px;
+  font-weight: 800;
+}
+`;
+
+function buildBookHtml(bookData, chapters) {
+  const tagsHtml = bookData.tags
+    .map((tag) => `<span class="zenn-pdf-tag">${escapeHtml(tag)}</span>`)
+    .join("");
+
+  const tocItemsHtml = chapters
+    .map((chapter, index) => `<li><span class="zenn-pdf-toc-number">${index + 1}.</span><span>${escapeHtml(chapter.title)}</span></li>`)
+    .join("");
+
+  const chaptersHtml = chapters
+    .map((chapter, index) => `<section class="zenn-pdf-chapter">
+<h2 class="zenn-pdf-chapter-title">${index + 1}. ${escapeHtml(chapter.title)}</h2>
+<div class="zenn-pdf-content znc">
+${chapter.contentHtml}
+</div>
+</section>`)
+    .join("\n");
+
+  return `<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(bookData.title)}</title>
+<style>
+${BASE_STYLES}
+${BOOK_EXTRA_STYLES}
+</style>
+</head>
+<body>
+<article class="zenn-pdf-article">
+<header class="zenn-pdf-cover">
+<div class="zenn-pdf-cover-label">Zenn Book</div>
+<h1 class="zenn-pdf-cover-title">${escapeHtml(bookData.title)}</h1>
+${bookData.summary ? `<p class="zenn-pdf-cover-summary">${escapeHtml(bookData.summary)}</p>` : ""}
+${tagsHtml ? `<div class="zenn-pdf-tags">${tagsHtml}</div>` : ""}
+<div class="zenn-pdf-source-url">${escapeHtml(bookData.url)}</div>
+</header>
+<nav class="zenn-pdf-toc">
+<h2 class="zenn-pdf-toc-heading">目次</h2>
+<ol class="zenn-pdf-toc-list">
+${tocItemsHtml}
+</ol>
+</nav>
+${chaptersHtml}
 </article>
 </body>
 </html>`;
@@ -617,6 +780,46 @@ async function extractArticleData(page, articleUrl) {
   }, articleUrl.href);
 }
 
+async function extractBookMeta(page, bookUrl) {
+  return page.evaluate((sourceUrl) => {
+    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+    const meta = (selector, attribute) => {
+      const element = document.querySelector(selector);
+      return element ? clean(element.getAttribute(attribute)) : "";
+    };
+
+    const titleElement = document.querySelector("h1");
+    const ogTitle = meta("meta[property='og:title']", "content");
+    const documentTitle = document.title || "Zenn book";
+    const title = clean(titleElement?.textContent || ogTitle || documentTitle)
+      .replace(/\s*[|｜]\s*Zenn\s*$/i, "");
+
+    const summary = clean(
+      meta("meta[property='og:description']", "content")
+      || meta("meta[name='description']", "content")
+      || ""
+    );
+
+    const tagCandidates = Array.from(document.querySelectorAll("a[href*='/topics/']"))
+      .map((element) => clean(element.textContent).replace(/^#\s*/, ""))
+      .filter(Boolean);
+    const tags = Array.from(new Set(tagCandidates)).slice(0, 12);
+
+    const seen = new Set();
+    const chapterHrefs = [];
+    document.querySelectorAll("a[href*='/viewer/']").forEach((anchor) => {
+      const href = new URL(anchor.getAttribute("href"), window.location.href).href;
+      if (!seen.has(href)) {
+        seen.add(href);
+        chapterHrefs.push(href);
+      }
+    });
+
+    return { title, summary, tags, url: sourceUrl, chapterHrefs };
+  }, bookUrl.href);
+}
+
 async function writeDebugHtml(debugHtmlPath, html) {
   if (!debugHtmlPath) {
     return;
@@ -689,6 +892,83 @@ async function convertZennArticleToPdf(articleUrl, outputPath, timeout, debugHtm
   await browser.close();
 }
 
+async function convertZennBookToPdf(target, outputPath, timeout, debugHtmlPath) {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+
+  console.log("[1/6] Launching Chromium.");
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({
+    viewport: {
+      width: 1280,
+      height: 1600
+    },
+    deviceScaleFactor: 1
+  });
+
+  page.setDefaultTimeout(timeout);
+  page.setDefaultNavigationTimeout(timeout);
+
+  console.log("[2/6] Opening the Zenn book table of contents.");
+  await page.goto(target.url.href, {
+    waitUntil: "domcontentloaded",
+    timeout
+  });
+  await page.waitForSelector("a[href*='/viewer/']", { state: "attached", timeout });
+
+  const bookMeta = await extractBookMeta(page, target.url);
+
+  if (bookMeta.chapterHrefs.length === 0) {
+    throw new Error("No chapters were found on this Zenn book page.");
+  }
+
+  console.log(`[3/6] Found ${bookMeta.chapterHrefs.length} chapters.`);
+
+  const chapters = [];
+
+  for (let index = 0; index < bookMeta.chapterHrefs.length; index += 1) {
+    const chapterUrl = new URL(bookMeta.chapterHrefs[index]);
+    console.log(`[4/6] (${index + 1}/${bookMeta.chapterHrefs.length}) Fetching chapter: ${chapterUrl.href}`);
+
+    await page.goto(chapterUrl.href, {
+      waitUntil: "domcontentloaded",
+      timeout
+    });
+    await page.waitForSelector("article, .znc", { timeout });
+    await autoScroll(page);
+    await waitForImages(page, DEFAULT_IMAGE_WAIT_MS);
+    await waitForFonts(page, DEFAULT_FONT_WAIT_MS);
+
+    chapters.push(await extractArticleData(page, chapterUrl));
+  }
+
+  console.log("[5/6] Building a printable standalone book.");
+  const html = buildBookHtml(bookMeta, chapters);
+  await writeDebugHtml(debugHtmlPath, html);
+
+  await page.setContent(html, {
+    waitUntil: "domcontentloaded",
+    timeout
+  });
+  await waitForImages(page, DEFAULT_IMAGE_WAIT_MS);
+  await waitForFonts(page, DEFAULT_FONT_WAIT_MS);
+
+  console.log("[6/6] Writing the PDF file.");
+  await page.pdf({
+    path: outputPath,
+    format: "A4",
+    printBackground: true,
+    preferCSSPageSize: true,
+    margin: {
+      top: "16mm",
+      right: "15mm",
+      bottom: "17mm",
+      left: "15mm"
+    }
+  });
+
+  await browser.close();
+}
+
 const options = parseCliArgs(process.argv.slice(2));
 
 if (options.help || !options.url) {
@@ -698,12 +978,16 @@ if (options.help || !options.url) {
 
 ensureFiniteTimeout(options.timeout);
 
-const articleUrl = parseZennArticleUrl(options.url);
-const outputPath = normalizeOutputPath(options.output, articleUrl);
+const target = parseZennUrl(options.url);
+const outputPath = normalizeOutputPath(options.output, target);
 
-console.log(`Input:  ${articleUrl.href}`);
+console.log(`Input:  ${target.url.href}`);
 console.log(`Output: ${outputPath}`);
 
-await convertZennArticleToPdf(articleUrl, outputPath, options.timeout, options.debugHtml);
+if (target.kind === "book") {
+  await convertZennBookToPdf(target, outputPath, options.timeout, options.debugHtml);
+} else {
+  await convertZennArticleToPdf(target.url, outputPath, options.timeout, options.debugHtml);
+}
 
 console.log("Done.");
